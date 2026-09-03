@@ -9,8 +9,8 @@ import re
 st.set_page_config(page_title="Britus Copywriter", page_icon="✏️", layout="centered")
 
 MODEL = "claude-sonnet-5"
-MAX_REVISIONS = 2
-LENGTH_TOLERANCE_PCT = 20  # rewritten copy shouldn't drift more than this from original length
+MAX_REVISIONS = 4
+LENGTH_TOLERANCE_PCT = 25  # rewritten copy shouldn't drift more than this from original length
 
 client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from environment / Streamlit secrets
 
@@ -273,17 +273,16 @@ def run_agent(copy_text: str, output_format: str, past_feedback: str = "") -> di
             "detail": {"length_check": length_result, "critique": critique_result},
         })
 
-        if critique_result["passed"] and length_result["within_range"]:
+        # Length is shown for information only — it no longer blocks a pass or
+        # triggers a revision on its own. Only the TOV critique decides that,
+        # since matching the original's exact word count isn't always the goal
+        # (e.g. Arabic and English don't map word-for-word).
+        if critique_result["passed"]:
             break
         if i == MAX_REVISIONS:
             break  # stop looping, hand off to human with issues visible
 
         issues = list(critique_result.get("issues", []))
-        if not length_result["within_range"]:
-            issues.append(
-                f"Length drifted {length_result['diff_pct']}% from the original "
-                f"({length_result['original_words']} → {length_result['rewritten_words']} words) — match the original's rhythm more closely."
-            )
         draft = draft_rewrite(
             copy_text, pillar_result["pillar"], output_format, language,
             past_feedback=past_feedback, prior_issues=issues,
@@ -295,8 +294,16 @@ def run_agent(copy_text: str, output_format: str, past_feedback: str = "") -> di
         "language": language,
         "trace": trace,
         "flagged_for_human_review": critique_result.get("flagged_for_human_review", []),
-        "passed_automated_checks": critique_result["passed"] and length_result.get("within_range", False),
+        "passed_automated_checks": critique_result["passed"],
+        "outstanding_issues": _build_outstanding_issues(critique_result, length_result),
     }
+
+
+def _build_outstanding_issues(critique_result: dict, length_result: dict) -> list[str]:
+    """Turn the last check's raw results into specific, readable reasons —
+    instead of a generic 'did not pass' message. Length is informational only
+    and never counted as an outstanding issue."""
+    return list(critique_result.get("issues", []))
 
 
 def render_journey(trace: list[dict]) -> None:
@@ -326,11 +333,11 @@ def render_journey(trace: list[dict]) -> None:
             crit = detail["critique"]
             st.markdown(f"**{step_num}. Checked its own draft (pass {pass_num})**")
 
-            length_icon = "✅" if length["within_range"] else "⚠️"
+            length_icon = "ℹ️"
             st.write(
-                f"{length_icon} Length: original was {length['original_words']} words, "
-                f"the draft was {length['rewritten_words']} words ({length['diff_pct']}% difference) — "
-                f"{'within the acceptable range' if length['within_range'] else 'drifted more than intended'}."
+                f"{length_icon} Length (informational only, doesn't affect pass/fail): original was "
+                f"{length['original_words']} words, the draft was {length['rewritten_words']} words "
+                f"({length['diff_pct']}% difference)."
             )
 
             crit_icon = "✅" if crit["passed"] else "⚠️"
@@ -344,8 +351,8 @@ def render_journey(trace: list[dict]) -> None:
                 for flag in crit["flagged_for_human_review"]:
                     st.write(f"- {flag}")
 
-            if crit["passed"] and length["within_range"]:
-                st.write("→ Both checks passed, so this became the final draft.")
+            if crit["passed"]:
+                st.write("→ Passed the tone-of-voice check, so this became the final draft.")
             else:
                 st.write("→ Rewrote the draft to address the issues above.")
 
@@ -382,7 +389,10 @@ if st.button("Run agent", type="primary") and copy_input.strip():
     if result["passed_automated_checks"]:
         st.success("Passed all automated TOV and length checks.")
     else:
-        st.info("Did not fully pass automated checks after revisions — review before using.")
+        st.info(
+            "**Still has open issues after revisions:**\n\n"
+            + "\n".join(f"- {i}" for i in result["outstanding_issues"])
+        )
 
     st.markdown("### How it got here")
     render_journey(result["trace"])
