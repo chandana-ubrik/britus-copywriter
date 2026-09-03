@@ -61,6 +61,17 @@ HARD RULES
 - Never use jargon without evidence
 - Never say "world-class," "leading," or "exceptional" without specific proof
 - Never sound like it was written for a brochure
+- NEVER invent a specific number, statistic, or class size that is not present
+  in the input copy. If the input doesn't mention "30 students" or a class
+  size, do not introduce one — not even rhetorically (e.g. "not one of
+  thirty"). If you want to convey personalization without a real number,
+  use a concrete but non-numeric detail instead (a specific observation,
+  moment, or action a teacher takes)
+- When referring to one child across a sentence or paragraph, use consistent
+  pronouns throughout (default to "they/their" for a generic child unless
+  the source material specifies gender). Do not alternate between "she" and
+  "him" as if describing the same child — that reads as multiple different
+  children and is confusing
 """
 
 PILLARS = {
@@ -147,6 +158,11 @@ CHECKLIST = """
 - Sounds like this specific school, not a generic one?
 - Does NOT open with a statistic or ranking?
 - Makes no "world-class / leading / exceptional" claim without named proof?
+- Contains NO invented numbers, statistics, or class sizes that weren't in
+  the original input (check carefully — including numbers used rhetorically,
+  like "not one of thirty," not just numbers stated as plain facts)?
+- Uses consistent pronouns for a single child throughout (not alternating
+  she/him/they for what's meant to be the same child)?
 """
 
 
@@ -163,7 +179,8 @@ def classify_pillar(copy_text: str) -> dict:
         model=MODEL, max_tokens=600, system=system,
         messages=[{"role": "user", "content": user}],
     )
-    return _parse_json(_extract_text(resp), fallback={"pillar": "Unclear", "reasoning": "Could not classify", "confidence": "low"})
+    raw = _extract_text(resp)
+    return _parse_json(raw, fallback={"pillar": "Unclear", "reasoning": _diagnostic_message(raw), "confidence": "low"})
 
 
 # ── STAGE 2: DRAFT ──
@@ -219,7 +236,9 @@ def critique(original: str, rewritten: str, pillar: str, output_format: str, lan
         f"{OUTPUT_FORMATS.get(output_format, '')}\n\n"
         "Also flag any claim in the rewrite that you cannot verify is factually accurate "
         "(named statistics, outcomes, awards, specific results) — these need a human to confirm, "
-        "don't guess whether they're true.\n\n"
+        "don't guess whether they're true. This includes numbers used rhetorically or "
+        "conversationally, not just numbers stated as plain facts — e.g. 'not one of thirty' "
+        "is an invented class-size claim even though it's not phrased like a statistic.\n\n"
     )
     if language == "Arabic":
         system += (
@@ -228,7 +247,8 @@ def critique(original: str, rewritten: str, pillar: str, output_format: str, lan
             "English-to-Arabic translation rather than natural Arabic phrasing.\n\n"
         )
     system += (
-        'Respond ONLY with JSON: {"passed": true/false, "issues": ["..."], '
+        "Respond with ONLY a raw JSON object — no markdown code fences, no explanation "
+        'before or after it: {"passed": true/false, "issues": ["..."], '
         '"flagged_for_human_review": ["..."]}'
     )
     user = f"Original:\n{original}\n\nRewritten:\n{rewritten}\n\nIntended pillar: {pillar}"
@@ -236,11 +256,28 @@ def critique(original: str, rewritten: str, pillar: str, output_format: str, lan
         model=MODEL, max_tokens=900, system=system,
         messages=[{"role": "user", "content": user}],
     )
-    return _parse_json(_extract_text(resp), fallback={"passed": True, "issues": [], "flagged_for_human_review": ["Auditor response could not be parsed — review manually."]})
+    raw = _extract_text(resp)
+    return _parse_json(
+        raw,
+        fallback={"passed": True, "issues": [], "flagged_for_human_review": [_diagnostic_message(raw)]},
+    )
+
+
+def _diagnostic_message(raw_text: str) -> str:
+    """A specific, debuggable message instead of a generic 'could not be parsed' dead end."""
+    if not raw_text:
+        return (
+            "Auditor step returned no text — likely ran out of token budget before answering. "
+            "Treated as unverified; the copy above was not actually re-checked."
+        )
+    snippet = raw_text[:200].replace("\n", " ")
+    return f"Auditor response wasn't valid JSON, so it couldn't be checked. Raw response started with: \"{snippet}...\""
 
 
 def _parse_json(text: str, fallback: dict) -> dict:
-    match = re.search(r"\{.*\}", text, re.DOTALL)
+    # Strip markdown code fences if the model wrapped its JSON in them despite instructions
+    cleaned = re.sub(r"```(?:json)?", "", text).strip()
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if not match:
         return fallback
     try:
