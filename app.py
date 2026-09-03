@@ -14,6 +14,16 @@ LENGTH_TOLERANCE_PCT = 20  # rewritten copy shouldn't drift more than this from 
 
 client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from environment / Streamlit secrets
 
+
+def _extract_text(resp) -> str:
+    """Pull the text out of an API response safely — don't assume content[0] is text.
+    Some responses can include non-text blocks first (e.g. thinking blocks)."""
+    for block in resp.content:
+        if getattr(block, "type", None) == "text":
+            return block.text.strip()
+    raise ValueError("No text block found in API response — got: " + str([getattr(b, 'type', '?') for b in resp.content]))
+
+
 # ── TOV GUIDE (unchanged from the original tool) ──
 TOV_GUIDE = """
 You are the Britus Education tone of voice copywriter.
@@ -152,7 +162,7 @@ def classify_pillar(copy_text: str) -> dict:
         model=MODEL, max_tokens=300, system=system,
         messages=[{"role": "user", "content": user}],
     )
-    return _parse_json(resp.content[0].text, fallback={"pillar": "Unclear", "reasoning": "Could not classify", "confidence": "low"})
+    return _parse_json(_extract_text(resp), fallback={"pillar": "Unclear", "reasoning": "Could not classify", "confidence": "low"})
 
 
 # ── STAGE 2: DRAFT ──
@@ -178,7 +188,7 @@ def draft_rewrite(
         model=MODEL, max_tokens=800, system=system,
         messages=[{"role": "user", "content": copy_text}],
     )
-    return resp.content[0].text.strip()
+    return _extract_text(resp)
 
 
 # ── STAGE 3: DETERMINISTIC TOOL — length check (no LLM, just math) ──
@@ -220,7 +230,7 @@ def critique(original: str, rewritten: str, pillar: str, output_format: str, lan
         model=MODEL, max_tokens=500, system=system,
         messages=[{"role": "user", "content": user}],
     )
-    return _parse_json(resp.content[0].text, fallback={"passed": True, "issues": [], "flagged_for_human_review": ["Auditor response could not be parsed — review manually."]})
+    return _parse_json(_extract_text(resp), fallback={"passed": True, "issues": [], "flagged_for_human_review": ["Auditor response could not be parsed — review manually."]})
 
 
 def _parse_json(text: str, fallback: dict) -> dict:
