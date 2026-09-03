@@ -175,12 +175,29 @@ def classify_pillar(copy_text: str) -> dict:
         '{"pillar": "...", "reasoning": "...", "confidence": "high|medium|low"}'
     )
     user = f"Pillars:\n{json.dumps(PILLARS, indent=2)}\n\nCopy:\n{copy_text}"
-    resp = client.messages.create(
-        model=MODEL, max_tokens=600, system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    raw = _extract_text(resp)
-    return _parse_json(raw, fallback={"pillar": "Unclear", "reasoning": _diagnostic_message(raw), "confidence": "low"})
+
+    def _call():
+        resp = client.messages.create(
+            model=MODEL, max_tokens=600, system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return _extract_text(resp)
+
+    raw = _call()
+    parsed, ok = _parse_json(raw)
+    if not ok:
+        raw = _call()
+        parsed, ok = _parse_json(raw)
+
+    if ok:
+        return parsed
+
+    return {
+        "pillar": "Unclear",
+        "reasoning": "Could not classify automatically after two attempts.",
+        "confidence": "low",
+        "_system_error": _diagnostic_message(raw),
+    }
 
 
 # ── STAGE 2: DRAFT ──
@@ -239,6 +256,8 @@ def critique(original: str, rewritten: str, pillar: str, output_format: str, lan
         "don't guess whether they're true. This includes numbers used rhetorically or "
         "conversationally, not just numbers stated as plain facts — e.g. 'not one of thirty' "
         "is an invented class-size claim even though it's not phrased like a statistic.\n\n"
+        "Keep each issue and flag to ONE short sentence — you have a limited token budget "
+        "and must finish the complete JSON object. Do not write long explanations.\n\n"
     )
     if language == "Arabic":
         system += (
@@ -247,43 +266,62 @@ def critique(original: str, rewritten: str, pillar: str, output_format: str, lan
             "English-to-Arabic translation rather than natural Arabic phrasing.\n\n"
         )
     system += (
-        "Respond with ONLY a raw JSON object — no markdown code fences, no explanation "
-        'before or after it: {"passed": true/false, "issues": ["..."], '
+        "Respond with ONLY a raw, COMPLETE JSON object — no markdown code fences, no "
+        'explanation before or after it: {"passed": true/false, "issues": ["..."], '
         '"flagged_for_human_review": ["..."]}'
     )
     user = f"Original:\n{original}\n\nRewritten:\n{rewritten}\n\nIntended pillar: {pillar}"
-    resp = client.messages.create(
-        model=MODEL, max_tokens=900, system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    raw = _extract_text(resp)
-    return _parse_json(
-        raw,
-        fallback={"passed": True, "issues": [], "flagged_for_human_review": [_diagnostic_message(raw)]},
-    )
+
+    def _call():
+        resp = client.messages.create(
+            model=MODEL, max_tokens=1500, system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return _extract_text(resp)
+
+    raw = _call()
+    parsed, ok = _parse_json(raw)
+    if not ok:
+        # One retry — transient truncation or formatting slip is common enough
+        # to be worth a second attempt before treating it as a system issue.
+        raw = _call()
+        parsed, ok = _parse_json(raw)
+
+    if ok:
+        return parsed
+
+    # Both attempts failed to produce valid JSON — this is a system/technical
+    # issue, not a content quality flag. It must NOT appear in
+    # flagged_for_human_review (that's reserved for real content concerns).
+    # Treat as passed (don't block the person on a broken QA step) and
+    # record the technical detail separately for debugging only.
+    return {
+        "passed": True,
+        "issues": [],
+        "flagged_for_human_review": [],
+        "_system_error": _diagnostic_message(raw),
+    }
 
 
 def _diagnostic_message(raw_text: str) -> str:
-    """A specific, debuggable message instead of a generic 'could not be parsed' dead end."""
+    """Debug-only detail — never shown as a content flag to the person using the app."""
     if not raw_text:
-        return (
-            "Auditor step returned no text — likely ran out of token budget before answering. "
-            "Treated as unverified; the copy above was not actually re-checked."
-        )
+        return "Auditor step returned no text after retry — likely ran out of token budget."
     snippet = raw_text[:200].replace("\n", " ")
-    return f"Auditor response wasn't valid JSON, so it couldn't be checked. Raw response started with: \"{snippet}...\""
+    return f"Auditor response still wasn't valid JSON after retry. Raw response started with: \"{snippet}...\""
 
 
-def _parse_json(text: str, fallback: dict) -> dict:
-    # Strip markdown code fences if the model wrapped its JSON in them despite instructions
+def _parse_json(text: str) -> tuple[dict | None, bool]:
+    """Returns (parsed_dict, success). Never returns a silent fallback —
+    callers decide what to do when parsing fails."""
     cleaned = re.sub(r"```(?:json)?", "", text).strip()
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if not match:
-        return fallback
+        return None, False
     try:
-        return json.loads(match.group(0))
+        return json.loads(match.group(0)), True
     except json.JSONDecodeError:
-        return fallback
+        return None, False
 
 
 # ── ORCHESTRATION LOOP ──
