@@ -17,11 +17,12 @@ client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from environment / Str
 
 def _extract_text(resp) -> str:
     """Pull the text out of an API response safely — don't assume content[0] is text.
-    Some responses can include non-text blocks first (e.g. thinking blocks)."""
+    Returns empty string (rather than raising) if no text block is present, so a single
+    bad response doesn't crash the whole app — callers fall back to defaults instead."""
     for block in resp.content:
         if getattr(block, "type", None) == "text":
             return block.text.strip()
-    raise ValueError("No text block found in API response — got: " + str([getattr(b, 'type', '?') for b in resp.content]))
+    return ""
 
 
 # ── TOV GUIDE (unchanged from the original tool) ──
@@ -159,7 +160,7 @@ def classify_pillar(copy_text: str) -> dict:
     )
     user = f"Pillars:\n{json.dumps(PILLARS, indent=2)}\n\nCopy:\n{copy_text}"
     resp = client.messages.create(
-        model=MODEL, max_tokens=300, system=system,
+        model=MODEL, max_tokens=600, system=system,
         messages=[{"role": "user", "content": user}],
     )
     return _parse_json(_extract_text(resp), fallback={"pillar": "Unclear", "reasoning": "Could not classify", "confidence": "low"})
@@ -185,10 +186,15 @@ def draft_rewrite(
     system += "\n\nReturn ONLY the rewritten copy. No explanation, no commentary."
 
     resp = client.messages.create(
-        model=MODEL, max_tokens=800, system=system,
+        model=MODEL, max_tokens=1200, system=system,
         messages=[{"role": "user", "content": copy_text}],
     )
-    return _extract_text(resp)
+    text = _extract_text(resp)
+    if not text:
+        # The model returned no usable text — don't crash, surface the original
+        # copy unchanged so the pipeline can still complete and the person can retry.
+        return copy_text
+    return text
 
 
 # ── STAGE 3: DETERMINISTIC TOOL — length check (no LLM, just math) ──
@@ -227,7 +233,7 @@ def critique(original: str, rewritten: str, pillar: str, output_format: str, lan
     )
     user = f"Original:\n{original}\n\nRewritten:\n{rewritten}\n\nIntended pillar: {pillar}"
     resp = client.messages.create(
-        model=MODEL, max_tokens=500, system=system,
+        model=MODEL, max_tokens=900, system=system,
         messages=[{"role": "user", "content": user}],
     )
     return _parse_json(_extract_text(resp), fallback={"passed": True, "issues": [], "flagged_for_human_review": ["Auditor response could not be parsed — review manually."]})
@@ -293,6 +299,57 @@ def run_agent(copy_text: str, output_format: str, past_feedback: str = "") -> di
     }
 
 
+def render_journey(trace: list[dict]) -> None:
+    """Render the agent's steps as a readable narrative, not raw JSON."""
+    step_num = 0
+    for step in trace:
+        stage = step["stage"]
+        detail = step["detail"]
+
+        if stage == "Language detection":
+            step_num += 1
+            st.markdown(f"**{step_num}. Detected the language**")
+            st.write(f"Read the input as **{detail['detected']}** and adjusted its approach accordingly.")
+
+        elif stage == "Pillar classification":
+            step_num += 1
+            st.markdown(f"**{step_num}. Chose which pillar this copy serves**")
+            st.write(
+                f"Picked **{detail['pillar']}** ({detail['confidence']} confidence). "
+                f"Reasoning: {detail['reasoning']}"
+            )
+
+        elif stage.startswith("Review pass"):
+            step_num += 1
+            pass_num = stage.split()[-1]
+            length = detail["length_check"]
+            crit = detail["critique"]
+            st.markdown(f"**{step_num}. Checked its own draft (pass {pass_num})**")
+
+            length_icon = "✅" if length["within_range"] else "⚠️"
+            st.write(
+                f"{length_icon} Length: original was {length['original_words']} words, "
+                f"the draft was {length['rewritten_words']} words ({length['diff_pct']}% difference) — "
+                f"{'within the acceptable range' if length['within_range'] else 'drifted more than intended'}."
+            )
+
+            crit_icon = "✅" if crit["passed"] else "⚠️"
+            st.write(f"{crit_icon} Tone-of-voice self-check: {'passed' if crit['passed'] else 'found issues'}.")
+            if crit.get("issues"):
+                st.write("Issues it found in its own draft:")
+                for issue in crit["issues"]:
+                    st.write(f"- {issue}")
+            if crit.get("flagged_for_human_review"):
+                st.write("Flagged as unverified — needs a human to confirm:")
+                for flag in crit["flagged_for_human_review"]:
+                    st.write(f"- {flag}")
+
+            if crit["passed"] and length["within_range"]:
+                st.write("→ Both checks passed, so this became the final draft.")
+            else:
+                st.write("→ Rewrote the draft to address the issues above.")
+
+
 # ── UI ──
 st.title("Britus Education")
 st.subheader("Tone of Voice Copywriter — Agentic")
@@ -327,10 +384,14 @@ if st.button("Run agent", type="primary") and copy_input.strip():
     else:
         st.info("Did not fully pass automated checks after revisions — review before using.")
 
-    with st.expander("See the agent's reasoning trace"):
+    st.markdown("### How it got here")
+    render_journey(result["trace"])
+
+    with st.expander("Raw trace data (for debugging)"):
         for step in result["trace"]:
             st.markdown(f"**{step['stage']}**")
             st.json(step["detail"])
+
 
     st.markdown("---")
     fb = st.text_input("Correction or note for next time (optional — helps it learn)")
