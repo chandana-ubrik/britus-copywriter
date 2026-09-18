@@ -1,489 +1,490 @@
-from __future__ import annotations
-
 import streamlit as st
 import anthropic
-import json
-import re
+import base64
 
-# ── CONFIG ──
-st.set_page_config(page_title="Britus Copywriter", page_icon="✏️", layout="centered")
+st.set_page_config(
+    page_title="Britus Copywriter",
+    page_icon="✏️",
+    layout="centered"
+)
 
-MODEL = "claude-sonnet-5"
-MAX_REVISIONS = 4
-LENGTH_TOLERANCE_PCT = 25  # rewritten copy shouldn't drift more than this from original length
+# ── UBRIK LOGO ──
+def load_logo(path):
+    with open(path, "rb") as f:
+        data = base64.b64encode(f.read()).decode()
+    return data
 
-client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from environment / Streamlit secrets
+try:
+    logo_data = load_logo("ubrik_logo.png")
+    st.sidebar.markdown(
+        f'<img src="data:image/png;base64,{logo_data}" width="120">',
+        unsafe_allow_html=True
+    )
+except:
+    st.sidebar.markdown("**ubrik**")
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Britus Copywriter")
+st.sidebar.markdown("Tell the tool what you need. Get copy ready to use.")
+st.sidebar.markdown("---")
+st.sidebar.markdown("**The voice**")
+st.sidebar.markdown("Warm · Approachable · Personal")
+st.sidebar.markdown("---")
+st.sidebar.markdown("**The three pillars**")
+st.sidebar.markdown("1. Every Child Is Known")
+st.sidebar.markdown("2. Skills for the World Ahead")
+st.sidebar.markdown("3. Roots That Last a Lifetime")
 
-def _extract_text(resp) -> str:
-    """Pull the text out of an API response safely — don't assume content[0] is text.
-    Returns empty string (rather than raising) if no text block is present, so a single
-    bad response doesn't crash the whole app — callers fall back to defaults instead."""
-    for block in resp.content:
-        if getattr(block, "type", None) == "text":
-            return block.text.strip()
-    return ""
+# ── SYSTEM PROMPT ──
+SYSTEM_PROMPT = """
+You are the Britus Education copywriter.
 
+Your job is to write original copy for Britus schools — not rewrite
+or translate existing copy. The user gives you a school, an audience,
+a content format, a platform, a language and a messaging angle.
+You write the copy from scratch, ready to use.
 
-# ── TOV GUIDE (unchanged from the original tool) ──
-TOV_GUIDE = """
-You are the Britus Education tone of voice copywriter.
+ABOUT BRITUS EDUCATION
+Britus Education is a private school group with 10 schools across
+Saudi Arabia, the UAE, Bahrain and Tunisia. The brand operates at
+two levels:
+- Group level: Britus Education. Tagline: Learning Without Limits.
+  Positioning line: To know a child is to change everything possible for them.
+- School level: Each school has its own name, principal and community
+  character. The tone of voice is shared. The personality belongs to
+  each school.
 
-Your job is to rewrite any piece of copy into the Britus voice.
-The Britus voice is warm, approachable and personal.
+THE TEN SCHOOLS
+- Education Castle International School — Riyadh, KSA
+- Leadership International School — Riyadh, KSA
+- Britus Al Olaya (BISO) — Riyadh, KSA
+- Education Gate International School — Riyadh, KSA
+- Belvedere British School — Abu Dhabi, UAE
+- BISB — Bahrain
+- BISSE — Bahrain (specialist SEN school)
+- BIST — Tunis, Tunisia
+- Sheffield Private School — Dubai, UAE
+- Rowad Al Farabi — Riyadh, KSA
+
+THE THREE PILLARS
+Every piece of copy maps to one of the three group pillars.
+
+Pillar 1 — Every Child Is Known
+The question this copy answers: Will my child be seen here?
+Topics: teacher relationships, personalised learning, student care,
+wellbeing, admissions experience, parent communication, inclusion.
+
+Pillar 2 — Skills for the World Ahead
+The question this copy answers: Will my child be stretched and
+prepared for what comes next?
+Topics: academic results, university destinations, named programmes,
+enrichment, innovation, character development.
+
+Pillar 3 — Roots That Last a Lifetime
+The question this copy answers: Will we belong somewhere?
+Topics: multicultural community, parent partnership, belonging,
+alumni, family atmosphere, continuity, safety.
+
+THE BRITUS VOICE: WARM, APPROACHABLE, PERSONAL
 
 WARM
 - Write to one specific person, not an audience
 - Use "you" and "your child" throughout
-- Say the specific thing, not the general thing
-- Concrete details create warmth. Abstractions remove it
+- Never use "parents" or "students" as a category
+- Name the specific thing — the programme, the person, the event
 - Short sentences carry warmth better than long ones
+- If it sounds like a committee wrote it, rewrite it
 
 APPROACHABLE
-- Do not open with a statistic, a ranking or an award
+- Never open with a statistic, ranking or award. Earn trust first
 - Never use jargon without a specific named example behind it
-- Acknowledge that the school choice is hard
+- Acknowledge the school choice is hard
 - The voice opens a door. It does not push anyone through it
-- Avoid passive voice when it creates distance or hides accountability.
-  But use passive voice when it keeps the focus on the child or the
-  parent rather than the school. "Your child will be known here" is
-  better than "We will know your child here." The test: does this
-  sentence serve the parent, or the school?
+- Avoid passive voice when it creates distance or hides accountability
+- Use passive voice when it keeps the focus on the child or parent
+  rather than the school. "Your child will be known here" is better
+  than "We will know your child here"
+- The test: does this sentence serve the parent, or the school?
 
 PERSONAL
 - Never refer to parents as "prospective families" or "stakeholders"
 - Never refer to children as "learners" or "the next generation"
-- Open with a specific truth about the school, not a generic claim
-- Each school has its own personality within the shared tone
+- Open with a specific truth, not a generic claim
+- Each school sounds like itself. The tone is shared. The personality
+  is the school's own
 
 HARD RULES
 - Never open with a statistic or ranking
-- Never use jargon without evidence
-- Never say "world-class," "leading," or "exceptional" without specific proof
+- Never use jargon without named evidence
+- Never say "world-class", "leading" or "exceptional" without proof
 - Never sound like it was written for a brochure
-- NEVER invent a specific number, statistic, or class size that is not present
-  in the input copy. If the input doesn't mention "30 students" or a class
-  size, do not introduce one — not even rhetorically (e.g. "not one of
-  thirty"). If you want to convey personalization without a real number,
-  use a concrete but non-numeric detail instead (a specific observation,
-  moment, or action a teacher takes)
-- When referring to one child across a sentence or paragraph, use consistent
-  pronouns throughout (default to "they/their" for a generic child unless
-  the source material specifies gender). Do not alternate between "she" and
-  "him" as if describing the same child — that reads as multiple different
-  children and is confusing
+- Never use the same voice across all schools
+
+WHAT ALL PARENTS SHARE
+- English proficiency is assumed. Never lead with it
+- University outcomes are the north star for every parent
+- Belonging matters as much as results
+- Word-of-mouth is the primary decision driver in every market
+- The decision starts before the school knows the family exists
+
+ARABIC WRITING RULES
+When the output language is Arabic, apply all of the above voice
+rules AND the following Arabic-specific rules:
+
+LANGUAGE AND REGISTER
+- Write in Modern Standard Arabic (MSA) as the default
+- For KSA schools, use a register that is formal but warm — not
+  bureaucratic, not colloquial Gulf dialect
+- For Bahrain schools, the same: formal MSA, warm register
+- For Tunisia (BIST), French-influenced Arabic is common but write
+  in clean MSA unless the user specifies otherwise
+- Never translate English copy word for word into Arabic. Write it
+  as a native Arabic speaker would say it to a parent
+
+TONE IN ARABIC
+- Arabic parents respond to warmth expressed through directness,
+  not through flowery language. Avoid excessive ta'zim (over-formal
+  honorifics) and mubalaghah (exaggeration)
+- Use "طفلك" (your child) and "أنت" (you) throughout — the same
+  personal directness as the English voice
+- Short sentences work in Arabic too. Do not write long nested
+  sentences just because Arabic grammar permits them
+- The emotional register should feel like a trusted school speaking
+  to a parent — not a government office, not an advertisement
+
+ARABIC-SPECIFIC HARD RULES
+- Never use "أفضل مدرسة" (best school) without specific proof
+- Never use "متميز" (distinguished/exceptional) as a standalone
+  claim — it is the Arabic equivalent of "world-class" and just
+  as hollow without evidence
+- Never use "نخبة" (elite) — it signals the wrong positioning for
+  a mid-market school group
+- Never start with a statistic
+- Never use corporate Arabic that sounds like a government press
+  release — phrases like "تسعى المؤسسة التعليمية إلى تحقيق..."
+  are exactly the kind of language to avoid
+- Keep CTAs direct: "احجز زيارتك" (book your visit) not
+  "يمكنكم التواصل معنا لتحديد موعد" (you may contact us to
+  arrange an appointment)
+
+ARABIC FORMAT NOTES
+- For social captions: emojis are acceptable and widely used by
+  Arabic-speaking school audiences in the Gulf
+- For WhatsApp: even more conversational. Short. A parent texting
+  another parent is the model
+- For ads: Arabic headline character limits are shorter in practice
+  because Arabic script takes more visual space — aim for 5–7 words
+  maximum in a headline
+- For email: begin with a greeting appropriate to the context —
+  "عزيزي ولي الأمر" for formal, "أهلاً" for warmer contexts
+- Always write right-to-left in your output — the text itself
+  should be correct Arabic, not romanised Arabic
+
+FORMAT GUIDANCE
+
+Social caption — Instagram static post:
+- 2–4 short sentences. One idea. Strong opening line.
+- End with a soft CTA or a question, not a hard sell.
+
+Social caption — Instagram carousel:
+- Slide 1: hook — one line that stops the scroll
+- Slides 2–4: one idea per slide, 1–2 sentences each
+- Final slide: CTA or closing statement
+- Label each slide clearly: Slide 1, Slide 2 etc.
+
+Social caption — Instagram Reel:
+- 1–2 lines max. Energy-led. Present tense.
+- Optional hashtags at the end.
+
+Social caption — Instagram Story text:
+- 1 line. Max 8 words. Must work over an image or video.
+- Optional CTA sticker text (e.g. "Book a tour" / "احجز زيارتك")
+
+Social caption — Facebook post:
+- 3–5 sentences. Slightly more context than Instagram.
+- One CTA at the end.
+
+LinkedIn post:
+- Opening line must hook without clickbait
+- 3–5 short paragraphs. One idea per paragraph.
+- Thought leadership tone — informed, confident, not salesy
+- Authored by or attributed to school leadership or Britus group
+- End with a question or a forward-looking statement, not a hard CTA
+
+Meta ad — primary text:
+- 1–3 sentences. Lead with the parent's concern, not the school's offer.
+- No jargon. No superlatives without proof.
+- Soft CTA at the end.
+
+Meta ad — headline:
+- Max 27 characters. One clear, specific promise.
+- No question marks. No exclamation marks unless essential.
+
+Meta ad — description:
+- 1 sentence. Supports the headline. Adds one specific detail.
+
+Google display ad:
+- Headline: max 30 characters. Direct. Benefit-led.
+- Description: max 90 characters. One proof point or one reassurance.
+
+Google search ad:
+- Headline 1 (30 chars): primary keyword + school name or location
+- Headline 2 (30 chars): key benefit or differentiator
+- Headline 3 (30 chars): CTA
+- Description 1 (90 chars): expand on the benefit. Specific.
+- Description 2 (90 chars): social proof or urgency. Honest.
+- Label each line clearly.
+
+Website hero:
+- Headline: 6–10 words. Names the audience or the promise.
+- Sub-line: 1–2 sentences. The school's one-sentence identity.
+- CTA 1 (primary): action verb + what they get
+- CTA 2 (secondary): softer alternative
+
+Landing page hero:
+- Headline: campaign-specific. Speaks to one parent concern.
+- Sub-line: 1 sentence. Backs up the headline with a specific detail.
+- CTA: clear, direct, single action.
+
+Website section copy:
+- Section label (optional, 2–4 words)
+- Heading: 6–10 words
+- Body: 2–3 sentences. One proof point. No lists unless essential.
+
+Meta title + description (SEO):
+- Title: max 60 characters. School name + primary keyword + location.
+- Meta description: max 155 characters. One benefit + one CTA.
+- Label each clearly.
+
+Email — admissions:
+- Subject line: curiosity or benefit-led. Max 50 characters.
+- Preview text: 1 sentence. Supports subject line. Max 90 characters.
+- Body: 3–4 short paragraphs. Opens with the parent, not the school.
+  Paragraph 1: acknowledge where they are in the decision
+  Paragraph 2: what the school offers that is specific and relevant
+  Paragraph 3: what happens next — simple, no pressure
+- Sign-off: warm, named if possible
+- CTA: one clear action
+
+Email subject line only:
+- 3–6 words. Benefit or curiosity-led. No clickbait.
+- Write 3 options.
+
+WhatsApp message:
+- Max 3 sentences. Direct. Warm. Conversational.
+- No formal language. No jargon. No long paragraphs.
+
+SMS:
+- Max 160 characters including spaces. One clear message + one link.
+- No emojis unless the school uses them. No abbreviations.
+
+Brochure panel:
+- Heading: 4–8 words. Bold, specific, human.
+- Body: 2–3 sentences max. One named proof point.
+- No bullet points unless essential.
+
+Pull quote / OOH tagline:
+- 5–10 words. Must work with no context — standalone impact.
+- Write 3 options.
+
+Event banner headline:
+- 3–6 words. Announces the event. Warm, not corporate.
+- Include school name or event name.
+- Write 2 options: one for awareness, one for conversion.
+
+Video script:
+- Opening line (0–3s): hook. Must work with visuals.
+- Body (3–25s): 3–4 short statements. Spoken, not written.
+- Closing (25–30s): CTA or emotional close.
+- Label timecodes. Write for the ear, not the eye.
+
+Video caption:
+- 1 line. Describes or teases what is in the video.
+- Present tense. Warm. Not a headline — a caption.
+
+OUTPUT FORMAT
+Always structure your response in two clearly labelled parts:
+
+PART 1 — THINKING
+Show your process before writing the copy. Format it exactly like this:
+
+🏫 School read: [what you know about this school's voice and character]
+👥 Audience identified: [who you are writing for and what they care about]
+📌 Pillar mapped: [which pillar this falls under and why]
+📐 Format requirements: [what the format demands — length, structure, tone]
+🌐 Language approach: [English or Arabic — and if Arabic, register and tone decisions]
+✍️ Angle interpreted: [what the user wants to say, in your own words]
+🎯 TOV rules applied: [which specific voice rules guided your choices]
+⚠️ What to avoid: [what you ruled out and why]
+
+PART 2 — COPY
+Write only the final copy here. No commentary. No labels other than
+what the format requires (carousel slides, email sections, etc.)
+If the output is Arabic, write in Arabic script only — no transliteration.
 """
 
-PILLARS = {
-    "Every Child, Known": "Will my child be seen here?",
-    "Learning That Goes Further": "Will my child be stretched?",
-    "A Community That Stays With You": "Will we belong here?",
-}
+# ── MAIN UI ──
+st.title("Britus Education Copywriter")
+st.caption(
+    "Tell the tool what you need. Get copy written in the Britus voice."
+)
 
-# ── ARABIC HANDLING ──
-# Applying the English TOV rules word-for-word to Arabic produces stiff,
-# overly formal copy — Arabic marketing register works differently.
-# This block only gets added to the system prompt when Arabic is detected.
-ARABIC_TOV_NOTE = """
-LANGUAGE NOTE — this piece is in Arabic.
-Do not translate the English TOV rules literally. Instead:
-- Use a warm, direct register appropriate for Gulf/UAE Arabic parent
-  audiences — closer to spoken register than formal/classical MSA,
-  but still professional (not colloquial slang)
-- Second-person address in Arabic can sound more formal by default
-  than English "you" — soften it with concrete, specific details
-  rather than relying on pronoun choice alone to create warmth
-- Avoid direct word-for-word translation of English idioms or
-  phrases like "opens a door" — find the natural Arabic equivalent
-  of the same idea, or drop the metaphor if there isn't one
-- Right-to-left punctuation and structure conventions apply
-- If you are not confident a phrase reads naturally to a native
-  Arabic speaker, flag it rather than guessing
-"""
+st.divider()
 
-ARABIC_RANGE = re.compile(r"[\u0600-\u06FF]")
+col1, col2 = st.columns(2)
 
-
-def detect_language(text: str) -> str:
-    """Rough heuristic: if a meaningful share of characters are Arabic script, treat as Arabic."""
-    arabic_chars = len(ARABIC_RANGE.findall(text))
-    return "Arabic" if arabic_chars > max(10, len(text) * 0.15) else "English"
-
-
-# ── OUTPUT FORMAT GUIDELINES ──
-# Fed into the draft stage so the agent writes to the actual constraints
-# of the format, not just generic body copy every time.
-OUTPUT_FORMATS = {
-    "Website / landing page copy": (
-        "Standard body copy for a webpage. Match the length and structure of the "
-        "original closely — this is not a summary or an expansion."
-    ),
-    "Email": (
-        "Include a short subject line (under 50 characters) above the body. "
-        "Open with a warm, specific greeting line. Keep paragraphs short — "
-        "2-3 sentences max — for scannability in an inbox."
-    ),
-    "Social media caption": (
-        "Hook in the first line — the reader decides whether to keep reading "
-        "in under a second. Keep it under ~150 words. One clear idea, not several. "
-        "End with a natural, non-pushy prompt to engage (comment, save, visit link) "
-        "only if it fits — do not force a CTA."
-    ),
-    "Story text (Instagram/Facebook story)": (
-        "Extremely short — think one punchy sentence or a short phrase, not a "
-        "paragraph. This is glanced at for 1-2 seconds. No subordinate clauses."
-    ),
-    "Banner / display ad": (
-        "Minimal words — a headline phrase, not a sentence. Aim for under 10 words "
-        "total. No punctuation-heavy structure. This needs to work as a glance, not a read."
-    ),
-    "Ad copy (paid social/search)": (
-        "Primary text roughly 400-450 characters, description roughly 90-100 "
-        "characters, headline roughly 35-40 characters if these are being broken "
-        "into separate fields — otherwise keep it tight and scannable as a whole. "
-        "Lead with the specific benefit, not the school name."
-    ),
-    "Other / unspecified": (
-        "No specific format constraints — match the length and structure of the "
-        "original input closely."
-    ),
-}
-
-CHECKLIST = """
-- Written in second person (you, your child)?
-- Names something specific rather than speaking generally?
-- Avoids jargon without a concrete example behind it?
-- Earns trust before asking for any action?
-- Would a real parent feel something reading it?
-- Sounds like this specific school, not a generic one?
-- Does NOT open with a statistic or ranking?
-- Makes no "world-class / leading / exceptional" claim without named proof?
-- Contains NO invented numbers, statistics, or class sizes that weren't in
-  the original input (check carefully — including numbers used rhetorically,
-  like "not one of thirty," not just numbers stated as plain facts)?
-- Uses consistent pronouns for a single child throughout (not alternating
-  she/him/they for what's meant to be the same child)?
-"""
-
-
-# ── STAGE 1: CLASSIFY ──
-def classify_pillar(copy_text: str) -> dict:
-    system = (
-        "You are a classifier for Britus Education marketing copy. Given a piece of "
-        "copy, identify which ONE of the three pillars below it most naturally serves, "
-        "and give one sentence of reasoning. Respond ONLY with JSON, no other text:\n"
-        '{"pillar": "...", "reasoning": "...", "confidence": "high|medium|low"}'
-    )
-    user = f"Pillars:\n{json.dumps(PILLARS, indent=2)}\n\nCopy:\n{copy_text}"
-
-    def _call():
-        resp = client.messages.create(
-            model=MODEL, max_tokens=600, system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        return _extract_text(resp)
-
-    raw = _call()
-    parsed, ok = _parse_json(raw)
-    if not ok:
-        raw = _call()
-        parsed, ok = _parse_json(raw)
-
-    if ok:
-        return parsed
-
-    return {
-        "pillar": "Unclear",
-        "reasoning": "Could not classify automatically after two attempts.",
-        "confidence": "low",
-        "_system_error": _diagnostic_message(raw),
-    }
-
-
-# ── STAGE 2: DRAFT ──
-def draft_rewrite(
-    copy_text: str,
-    pillar: str,
-    output_format: str,
-    language: str,
-    past_feedback: str = "",
-    prior_issues: list[str] | None = None,
-) -> str:
-    system = TOV_GUIDE + f"\n\nThis copy should serve the pillar: {pillar}"
-    system += f"\n\nOUTPUT FORMAT: {output_format}\n{OUTPUT_FORMATS.get(output_format, '')}"
-    if language == "Arabic":
-        system += "\n" + ARABIC_TOV_NOTE
-    if past_feedback:
-        system += f"\n\nRecent corrections the team has made to earlier drafts — learn from these:\n{past_feedback}"
-    if prior_issues:
-        system += f"\n\nYour previous draft had these specific issues — fix them this time:\n- " + "\n- ".join(prior_issues)
-    system += "\n\nReturn ONLY the rewritten copy. No explanation, no commentary."
-
-    resp = client.messages.create(
-        model=MODEL, max_tokens=1200, system=system,
-        messages=[{"role": "user", "content": copy_text}],
-    )
-    text = _extract_text(resp)
-    if not text:
-        # The model returned no usable text — don't crash, surface the original
-        # copy unchanged so the pipeline can still complete and the person can retry.
-        return copy_text
-    return text
-
-
-# ── STAGE 3: DETERMINISTIC TOOL — length check (no LLM, just math) ──
-def check_length(original: str, rewritten: str) -> dict:
-    orig_words = len(original.split())
-    new_words = len(rewritten.split())
-    diff_pct = abs(new_words - orig_words) / max(orig_words, 1) * 100
-    return {
-        "original_words": orig_words,
-        "rewritten_words": new_words,
-        "diff_pct": round(diff_pct, 1),
-        "within_range": diff_pct <= LENGTH_TOLERANCE_PCT,
-    }
-
-
-# ── STAGE 4: SELF-CRITIQUE ──
-def critique(original: str, rewritten: str, pillar: str, output_format: str, language: str) -> dict:
-    system = (
-        "You are a strict, skeptical TOV auditor for Britus Education. Check the "
-        f"REWRITTEN copy against this checklist:\n{CHECKLIST}\n\n"
-        f"It should also match this output format's constraints: {output_format} — "
-        f"{OUTPUT_FORMATS.get(output_format, '')}\n\n"
-        "Also flag any claim in the rewrite that you cannot verify is factually accurate "
-        "(named statistics, outcomes, awards, specific results) — these need a human to confirm, "
-        "don't guess whether they're true. This includes numbers used rhetorically or "
-        "conversationally, not just numbers stated as plain facts — e.g. 'not one of thirty' "
-        "is an invented class-size claim even though it's not phrased like a statistic.\n\n"
-        "Keep each issue and flag to ONE short sentence — you have a limited token budget "
-        "and must finish the complete JSON object. Do not write long explanations.\n\n"
-    )
-    if language == "Arabic":
-        system += (
-            "The copy is in Arabic — judge it as a native Arabic reader would, not by "
-            "translating the checklist literally. Flag anything that reads like a direct "
-            "English-to-Arabic translation rather than natural Arabic phrasing.\n\n"
-        )
-    system += (
-        "Respond with ONLY a raw, COMPLETE JSON object — no markdown code fences, no "
-        'explanation before or after it: {"passed": true/false, "issues": ["..."], '
-        '"flagged_for_human_review": ["..."]}'
-    )
-    user = f"Original:\n{original}\n\nRewritten:\n{rewritten}\n\nIntended pillar: {pillar}"
-
-    def _call():
-        resp = client.messages.create(
-            model=MODEL, max_tokens=1500, system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        return _extract_text(resp)
-
-    raw = _call()
-    parsed, ok = _parse_json(raw)
-    if not ok:
-        # One retry — transient truncation or formatting slip is common enough
-        # to be worth a second attempt before treating it as a system issue.
-        raw = _call()
-        parsed, ok = _parse_json(raw)
-
-    if ok:
-        return parsed
-
-    # Both attempts failed to produce valid JSON — this is a system/technical
-    # issue, not a content quality flag. It must NOT appear in
-    # flagged_for_human_review (that's reserved for real content concerns).
-    # Treat as passed (don't block the person on a broken QA step) and
-    # record the technical detail separately for debugging only.
-    return {
-        "passed": True,
-        "issues": [],
-        "flagged_for_human_review": [],
-        "_system_error": _diagnostic_message(raw),
-    }
-
-
-def _diagnostic_message(raw_text: str) -> str:
-    """Debug-only detail — never shown as a content flag to the person using the app."""
-    if not raw_text:
-        return "Auditor step returned no text after retry — likely ran out of token budget."
-    snippet = raw_text[:200].replace("\n", " ")
-    return f"Auditor response still wasn't valid JSON after retry. Raw response started with: \"{snippet}...\""
-
-
-def _parse_json(text: str) -> tuple[dict | None, bool]:
-    """Returns (parsed_dict, success). Never returns a silent fallback —
-    callers decide what to do when parsing fails."""
-    cleaned = re.sub(r"```(?:json)?", "", text).strip()
-    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if not match:
-        return None, False
-    try:
-        return json.loads(match.group(0)), True
-    except json.JSONDecodeError:
-        return None, False
-
-
-# ── ORCHESTRATION LOOP ──
-def run_agent(copy_text: str, output_format: str, past_feedback: str = "") -> dict:
-    trace = []
-
-    language = detect_language(copy_text)
-    trace.append({"stage": "Language detection", "detail": {"detected": language}})
-
-    pillar_result = classify_pillar(copy_text)
-    trace.append({"stage": "Pillar classification", "detail": pillar_result})
-
-    draft = draft_rewrite(
-        copy_text, pillar_result["pillar"], output_format, language, past_feedback=past_feedback
-    )
-    critique_result = {"passed": False, "issues": [], "flagged_for_human_review": []}
-    length_result = {}
-
-    for i in range(MAX_REVISIONS + 1):
-        length_result = check_length(copy_text, draft)
-        critique_result = critique(copy_text, draft, pillar_result["pillar"], output_format, language)
-        trace.append({
-            "stage": f"Review pass {i + 1}",
-            "detail": {"length_check": length_result, "critique": critique_result},
-        })
-
-        # Length is shown for information only — it no longer blocks a pass or
-        # triggers a revision on its own. Only the TOV critique decides that,
-        # since matching the original's exact word count isn't always the goal
-        # (e.g. Arabic and English don't map word-for-word).
-        if critique_result["passed"]:
-            break
-        if i == MAX_REVISIONS:
-            break  # stop looping, hand off to human with issues visible
-
-        issues = list(critique_result.get("issues", []))
-        draft = draft_rewrite(
-            copy_text, pillar_result["pillar"], output_format, language,
-            past_feedback=past_feedback, prior_issues=issues,
-        )
-
-    return {
-        "final_copy": draft,
-        "pillar": pillar_result,
-        "language": language,
-        "trace": trace,
-        "flagged_for_human_review": critique_result.get("flagged_for_human_review", []),
-        "passed_automated_checks": critique_result["passed"],
-        "outstanding_issues": _build_outstanding_issues(critique_result, length_result),
-    }
-
-
-def _build_outstanding_issues(critique_result: dict, length_result: dict) -> list[str]:
-    """Turn the last check's raw results into specific, readable reasons —
-    instead of a generic 'did not pass' message. Length is informational only
-    and never counted as an outstanding issue."""
-    return list(critique_result.get("issues", []))
-
-
-def render_journey(trace: list[dict]) -> None:
-    """Render the agent's steps as a readable narrative, not raw JSON."""
-    step_num = 0
-    for step in trace:
-        stage = step["stage"]
-        detail = step["detail"]
-
-        if stage == "Language detection":
-            step_num += 1
-            st.markdown(f"**{step_num}. Detected the language**")
-            st.write(f"Read the input as **{detail['detected']}** and adjusted its approach accordingly.")
-
-        elif stage == "Pillar classification":
-            step_num += 1
-            st.markdown(f"**{step_num}. Chose which pillar this copy serves**")
-            st.write(
-                f"Picked **{detail['pillar']}** ({detail['confidence']} confidence). "
-                f"Reasoning: {detail['reasoning']}"
-            )
-
-        elif stage.startswith("Review pass"):
-            step_num += 1
-            pass_num = stage.split()[-1]
-            length = detail["length_check"]
-            crit = detail["critique"]
-            st.markdown(f"**{step_num}. Checked its own draft (pass {pass_num})**")
-
-            length_icon = "ℹ️"
-            st.write(
-                f"{length_icon} Length (informational only, doesn't affect pass/fail): original was "
-                f"{length['original_words']} words, the draft was {length['rewritten_words']} words "
-                f"({length['diff_pct']}% difference)."
-            )
-
-            crit_icon = "✅" if crit["passed"] else "⚠️"
-            st.write(f"{crit_icon} Tone-of-voice self-check: {'passed' if crit['passed'] else 'found issues'}.")
-            if crit.get("issues"):
-                st.write("Issues it found in its own draft:")
-                for issue in crit["issues"]:
-                    st.write(f"- {issue}")
-            if crit.get("flagged_for_human_review"):
-                st.write("Flagged as unverified — needs a human to confirm:")
-                for flag in crit["flagged_for_human_review"]:
-                    st.write(f"- {flag}")
-
-            if crit["passed"]:
-                st.write("→ Passed the tone-of-voice check, so this became the final draft.")
-            else:
-                st.write("→ Rewrote the draft to address the issues above.")
-
-
-# ── UI ──
-st.title("Britus Education")
-st.subheader("Tone of Voice Copywriter — Agentic")
-st.caption("Paste copy below. The agent classifies, drafts, checks itself, and revises before handing it back to you.")
-
-copy_input = st.text_area("Paste your copy here", height=180)
-
-output_format = st.selectbox("What is this copy for?", list(OUTPUT_FORMATS.keys()))
-
-with st.expander("Optional: paste recent team corrections to help it learn"):
-    past_feedback = st.text_area(
-        "e.g. 'Changed passive voice on school names section to active' — paste a few recent notes",
-        height=100,
+with col1:
+    school = st.selectbox(
+        "School",
+        ["Group / Britus Education",
+         "Education Castle International School",
+         "Leadership International School",
+         "Britus Al Olaya (BISO)",
+         "Education Gate International School",
+         "Belvedere British School",
+         "BISB Bahrain",
+         "BISSE Bahrain",
+         "BIST Tunisia",
+         "Sheffield Private School",
+         "Rowad Al Farabi"]
     )
 
-if st.button("Run agent", type="primary") and copy_input.strip():
-    with st.spinner("Detecting language → classifying → drafting → checking → revising..."):
-        result = run_agent(copy_input, output_format, past_feedback=past_feedback)
-
-    st.markdown("### Final copy")
-    st.markdown(
-        f"**Pillar:** {result['pillar']['pillar']} · confidence: {result['pillar']['confidence']} "
-        f"· **language:** {result['language']} · **format:** {output_format}"
+with col2:
+    pillar = st.selectbox(
+        "Pillar",
+        ["Not sure — decide based on the angle",
+         "Pillar 1 — Every Child Is Known",
+         "Pillar 2 — Skills for the World Ahead",
+         "Pillar 3 — Roots That Last a Lifetime"]
     )
-    st.write(result["final_copy"])
 
-    if result["flagged_for_human_review"]:
-        st.warning("**Flagged for your review — not verified by the agent:**\n\n" + "\n".join(f"- {f}" for f in result["flagged_for_human_review"]))
+col3, col4 = st.columns(2)
 
-    if result["passed_automated_checks"]:
-        st.success("Passed all automated TOV and length checks.")
+with col3:
+    content_format = st.selectbox(
+        "Content format",
+        ["Social caption — Instagram static post",
+         "Social caption — Instagram carousel",
+         "Social caption — Instagram Reel",
+         "Social caption — Instagram Story text",
+         "Social caption — Facebook post",
+         "LinkedIn post",
+         "Meta ad — primary text",
+         "Meta ad — headline",
+         "Meta ad — description",
+         "Google display ad",
+         "Google search ad",
+         "Website hero",
+         "Landing page hero",
+         "Website section copy",
+         "Meta title + description (SEO)",
+         "Email — admissions",
+         "Email subject line only",
+         "WhatsApp message",
+         "SMS",
+         "Brochure panel",
+         "Pull quote / OOH tagline",
+         "Event banner headline",
+         "Video script",
+         "Video caption"]
+    )
+
+with col4:
+    platform = st.selectbox(
+        "Platform",
+        ["Instagram",
+         "Facebook",
+         "Instagram + Facebook",
+         "LinkedIn",
+         "Google",
+         "WhatsApp",
+         "SMS",
+         "Email",
+         "Website",
+         "Landing page",
+         "Print / Brochure",
+         "Outdoor / OOH",
+         "Video"]
+    )
+
+col5, col6 = st.columns(2)
+
+with col5:
+    language = st.selectbox(
+        "Output language",
+        ["English",
+         "Arabic",
+         "English + Arabic (both)"]
+    )
+
+with col6:
+    audience = st.text_input(
+        "Audience",
+        placeholder="e.g. Saudi national families, South Asian expat parents..."
+    )
+
+angle = st.text_area(
+    "What do you want to say?",
+    height=120,
+    placeholder="e.g. Highlight the open-door policy. Warm and reassuring. No hard sell."
+)
+
+if st.button("Write copy", type="primary"):
+    if not angle.strip():
+        st.warning("Tell the tool what you want to say first.")
     else:
-        st.info(
-            "**Still has open issues after revisions:**\n\n"
-            + "\n".join(f"- {i}" for i in result["outstanding_issues"])
-        )
+        user_message = f"""Write copy for the following:
 
-    st.markdown("### How it got here")
-    render_journey(result["trace"])
+School: {school}
+Pillar: {pillar}
+Content format: {content_format}
+Platform: {platform}
+Output language: {language}
+Audience: {audience if audience.strip() else "Not specified — use your judgement based on the school and angle"}
+What to say: {angle}"""
 
-    with st.expander("Raw trace data (for debugging)"):
-        for step in result["trace"]:
-            st.markdown(f"**{step['stage']}**")
-            st.json(step["detail"])
+        with st.spinner("Writing..."):
+            client = anthropic.Anthropic()
+            message = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1500,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {"role": "user", "content": user_message}
+                ]
+            )
+            output = message.content[0].text
 
+        # Split thinking from copy
+        if "PART 2 — COPY" in output:
+            parts = output.split("PART 2 — COPY")
+            thinking = parts[0].replace("PART 1 — THINKING", "").strip()
+            copy = parts[1].strip()
+        else:
+            thinking = ""
+            copy = output.strip()
 
-    st.markdown("---")
-    fb = st.text_input("Correction or note for next time (optional — helps it learn)")
-    if st.button("Save this feedback") and fb.strip():
-        # See README for wiring this to a persistent store (Google Sheet).
-        # Without persistence, this only helps within the current session.
-        st.session_state.setdefault("feedback_log", []).append(fb)
-        st.success("Saved for this session. See setup notes to make this persist across sessions.")
-elif copy_input.strip() == "":
-    st.caption("Waiting for copy to rewrite.")
+        st.divider()
+
+        if thinking:
+            with st.expander("🧠 How the copy was built", expanded=True):
+                st.markdown(thinking)
+
+        st.subheader("Copy")
+        st.write(copy)
+        st.code(copy, language=None)
+        st.caption("Use the copy icon above to copy the text.")
+
+        st.divider()
+        st.caption("Was this right?")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Yes, use this"):
+                st.success("Glad it worked.")
+        with col2:
+            if st.button("Not quite"):
+                st.text_area(
+                    "What was off?",
+                    placeholder="Tell us what could be better...",
+                    key="feedback"
+                )
