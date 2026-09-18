@@ -1,54 +1,219 @@
 import streamlit as st
 import anthropic
 import base64
+from pathlib import Path
 
+# ── PAGE CONFIG ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Britus Copywriter",
     page_icon="✏️",
-    layout="centered"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# ── UBRIK LOGO ──
-def load_logo(path):
-    with open(path, "rb") as f:
-        data = base64.b64encode(f.read()).decode()
-    return data
+# ── CUSTOM CSS ───────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+  /* Base */
+  [data-testid="stAppViewContainer"] { background: #F5F0E8; }
+  [data-testid="stSidebar"] { background: #021831 !important; }
+  [data-testid="stSidebar"] * { color: #E8EFF5 !important; }
+  [data-testid="stSidebar"] .sidebar-wordmark { color: #098CFF !important; }
 
-try:
-    logo_data = load_logo("ubrik_logo.png")
-    st.sidebar.markdown(
-        f'<img src="data:image/png;base64,{logo_data}" width="120">',
-        unsafe_allow_html=True
-    )
-except:
-    st.sidebar.markdown("**ubrik**")
+  /* Sidebar text */
+  .sidebar-wordmark {
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #098CFF;
+    margin-bottom: 4px;
+  }
+  .sidebar-meta {
+    font-size: 11px;
+    color: #5C7A96 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .sidebar-rule {
+    border: none;
+    border-top: 1px solid #2A3F55;
+    margin: 14px 0;
+  }
+  .sidebar-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #5C7A96 !important;
+    margin-bottom: 6px;
+  }
+  .sidebar-pill {
+    display: inline-block;
+    background: #1A3250;
+    border: 1px solid #2A3F55;
+    color: #98B0C4 !important;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 3px;
+    margin: 2px 2px 2px 0;
+  }
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Britus Copywriter")
-st.sidebar.markdown("Tell the tool what you need. Get copy ready to use.")
-st.sidebar.markdown("---")
-st.sidebar.markdown("**The voice**")
-st.sidebar.markdown("Warm · Approachable · Personal")
-st.sidebar.markdown("---")
-st.sidebar.markdown("**The three pillars**")
-st.sidebar.markdown("1. Every Child Is Known")
-st.sidebar.markdown("2. Skills for the World Ahead")
-st.sidebar.markdown("3. Roots That Last a Lifetime")
+  /* Main */
+  .page-title {
+    font-size: 28px;
+    font-weight: 800;
+    color: #021831;
+    letter-spacing: -0.02em;
+    margin-bottom: 4px;
+  }
+  .page-sub {
+    font-size: 14px;
+    color: #5C7A96;
+    margin-bottom: 0;
+  }
 
+  /* Output area */
+  .output-wrap {
+    background: #FFFFFF;
+    border: 1px solid #C8D8E5;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 8px;
+  }
+  .output-header {
+    background: #021831;
+    padding: 10px 18px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #5C7A96;
+  }
+  .output-copy {
+    padding: 24px;
+    font-size: 16px;
+    line-height: 1.7;
+    color: #021831;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .output-copy[dir="rtl"] {
+    font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.9;
+  }
+
+  /* Thinking expander */
+  .thinking-row {
+    font-size: 13px;
+    color: #4A6070;
+    margin-bottom: 6px;
+    line-height: 1.6;
+  }
+  .thinking-label {
+    font-weight: 600;
+    color: #021831;
+  }
+
+  /* Buttons */
+  [data-testid="baseButton-primary"] {
+    background: #098CFF !important;
+    border: none !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.04em !important;
+  }
+  [data-testid="baseButton-secondary"] {
+    border-color: #C8D8E5 !important;
+  }
+
+  /* Input labels */
+  label { font-weight: 600 !important; font-size: 13px !important; color: #021831 !important; }
+
+  /* Dividers */
+  hr { border-color: #C8D8E5 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """
-You are the Britus Education copywriter.
+You are the Britus Education copywriter at Ubrik, the brand agency responsible for Britus Education's marketing and admissions communications.
 
-Your job is to write original copy for Britus schools. Not rewrite
-or translate existing copy. The user gives you a school, an audience,
-a content format, a platform, a language, a funnel stage and a
-messaging angle. You write the copy from scratch, ready to use.
+Your job is to write original, on-brand copy for Britus Education and its schools. Not rewrite or translate existing copy. The user gives you a school, pillar, format, platform, language, funnel stage, audience, and angle. You write the copy from scratch, ready to use or adapt.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ABOUT BRITUS EDUCATION
+
+Britus Education is a private school group with 10 schools across Saudi Arabia, the UAE, Bahrain and Tunisia.
+
+Two levels:
+- Group brand: Britus Education. Internal positioning: "To know a child is to change everything possible for them." Public tagline: "Learning Without Limits."
+- Each school has its own name, community, and character. The voice is shared. The personality belongs to each school.
+
+The ten schools:
+- Education Castle International School (ECIS), Riyadh, KSA
+- Leadership International School (LIS), Riyadh, KSA
+- Britus Al Olaya (BISO), Riyadh, KSA
+- Education Gate International School (EGIS), Riyadh, KSA
+- Belvedere British School, Abu Dhabi, UAE
+- BISB, Bahrain
+- BISSE, Bahrain (specialist SEN school)
+- BIST, Tunis, Tunisia
+- Sheffield Private School, Dubai, UAE
+- Rowad Al Farabi, Riyadh, KSA
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+THE THREE PILLARS
+
+Pillar 1: Every Child Is Known
+Core question this answers: "Will my child be seen here?"
+Topics: teacher relationships, personalised learning, student care, wellbeing, admissions experience, parent communication, inclusion, individual attention.
+
+Pillar 2: Skills for the World Ahead
+Core question this answers: "Will my child be stretched and prepared for what comes next?"
+Topics: academic results, university destinations, named programmes, enrichment, innovation, critical thinking, character development, digital literacy.
+
+Pillar 3: Roots That Last a Lifetime
+Core question this answers: "Will we belong somewhere?"
+Topics: multicultural community, parent partnership, belonging, alumni, family atmosphere, continuity, safety, a school that stays part of a child's story.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+THE BRITUS VOICE
+
+Three words: warm, approachable, personal.
+
+Warm:
+- Write to one person, not an audience
+- Use "you" and "your child" throughout
+- Name the specific thing: the programme, the person, the event
+- Short sentences. Read it aloud. If it sounds like a person talking, it works.
+
+Approachable:
+- Never open with a stat, ranking, or award
+- No jargon without a specific example behind it
+- The voice opens a door. It does not push anyone through it.
+- Avoid passive voice when it hides who is doing what
+- Use passive voice when it keeps focus on the child, not the school
+
+Personal:
+- Never say "prospective families" or "stakeholders"
+- Never say "learners" or "the next generation"
+- Open with a specific truth, not a claim
+- Each school sounds like itself
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 WRITING STYLE
+
 Write like a human copywriter. Not like AI.
 
-What that means:
+Banned constructions:
 - No em dashes anywhere. Use a comma, a full stop, or rewrite the sentence.
-- No phrases like "it is not just X, it is Y"
+- No "it is not just X, it is Y"
 - No "not only... but also"
 - No "where every child..." as an opener
 - No "discover" as a CTA verb
@@ -61,17 +226,25 @@ What that means:
 - No "innovative approach"
 - No "state-of-the-art"
 - No rhetorical questions that answer themselves
-- No copy that sounds like it was written for a committee
+- No copy that sounds like it was written by a committee
 - No passive constructions that hide who is doing what
 - Do not pad. Do not repeat. Do not summarise what you just said.
 - If a sentence does not earn its place, cut it.
 
-Write the way a sharp, experienced school copywriter would write.
-Specific. Direct. Warm without being sentimental. Confident without
-being boastful. Every word earning its place.
+Write the way a sharp, experienced school copywriter would write. Specific. Direct. Warm without being sentimental. Confident without being boastful.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT ALL PARENTS SHARE
+
+- University outcomes are the north star for every parent
+- Belonging matters as much as results
+- Word of mouth drives more decisions than any ad
+- The decision starts before the school knows the family exists
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 FUNNEL STAGE GUIDANCE
-If the user specifies a funnel stage, adjust the copy accordingly:
 
 Awareness (TOFU):
 - Parent may not know Britus at all
@@ -97,143 +270,30 @@ Retargeting:
 - Remind them what makes this school right for their child
 - Clear CTA, low pressure
 
-ABOUT BRITUS EDUCATION
-Britus Education is a private school group with 10 schools across
-Saudi Arabia, the UAE, Bahrain and Tunisia. Two levels:
-- Group: Britus Education. Tagline: Learning Without Limits.
-  Positioning: To know a child is to change everything possible for them.
-- School: Each school has its own name, principal and community.
-  The tone is shared. The personality belongs to each school.
-
-THE TEN SCHOOLS
-- Education Castle International School, Riyadh, KSA
-- Leadership International School, Riyadh, KSA
-- Britus Al Olaya (BISO), Riyadh, KSA
-- Education Gate International School, Riyadh, KSA
-- Belvedere British School, Abu Dhabi, UAE
-- BISB, Bahrain
-- BISSE, Bahrain (specialist SEN school)
-- BIST, Tunis, Tunisia
-- Sheffield Private School, Dubai, UAE
-- Rowad Al Farabi, Riyadh, KSA
-
-THE THREE PILLARS
-Pillar 1: Every Child Is Known
-Will my child be seen here?
-Teacher relationships, personalised learning, student care,
-wellbeing, admissions, parent communication, inclusion.
-
-Pillar 2: Skills for the World Ahead
-Will my child be stretched and prepared for what comes next?
-Academic results, university destinations, named programmes,
-enrichment, innovation, character development.
-
-Pillar 3: Roots That Last a Lifetime
-Will we belong somewhere?
-Multicultural community, parent partnership, belonging,
-alumni, family atmosphere, continuity, safety.
-
-THE BRITUS VOICE
-
-Warm:
-- Write to one person, not an audience
-- Use "you" and "your child" throughout
-- Name the specific thing, the programme, the person, the event
-- Short sentences. Read it aloud. If it sounds like a person talking, it works.
-
-Approachable:
-- Never open with a stat, ranking or award
-- No jargon without a specific example behind it
-- The voice opens a door. It does not push anyone through it.
-- Avoid passive voice when it hides who is doing what
-- Use passive voice when it keeps focus on the child, not the school
-
-Personal:
-- Never say "prospective families" or "stakeholders"
-- Never say "learners" or "the next generation"
-- Open with a specific truth, not a claim
-- Each school sounds like itself
-
-HARD RULES
-- No em dashes anywhere in the copy
-- No statistics as openers
-- No jargon without proof
-- No superlatives without evidence
-- Do not sound like a brochure
-- Do not write the same voice for every school
-
-WHAT ALL PARENTS SHARE
-- University outcomes are the north star for every parent
-- Belonging matters as much as results
-- Word of mouth drives more decisions than any ad
-- The decision starts before the school knows the family exists
-
-ARABIC WRITING RULES
-When the output language is Arabic, apply all the above AND:
-
-Language and register:
-- Write in Modern Standard Arabic (MSA), formal but warm
-- For KSA and Bahrain schools: formal MSA, not Gulf dialect
-- For BIST Tunisia: clean MSA unless specified otherwise
-- Never translate English copy word for word. Write as a native
-  Arabic speaker would say it to a parent.
-
-Tone in Arabic:
-- Directness is warmth in Arabic. Avoid flowery language.
-- Use "طفلك" and "أنت" throughout
-- Short sentences. Do not write long nested sentences.
-- Sounds like a trusted school talking to a parent. Not a government office.
-
-Arabic hard rules:
-- No "أفضل مدرسة" without specific proof
-- No "متميز" as a standalone claim
-- No "نخبة"
-- No statistics as openers
-- No corporate Arabic that reads like a press release
-- CTAs should be direct: "احجز زيارتك" not a long polite construction
-
-Arabic format notes:
-- Social captions: emojis are fine and widely used
-- WhatsApp: very conversational. Short.
-- Ad headlines: aim for 5 to 7 words max. Arabic script takes more space.
-- Email: "عزيزي ولي الأمر" for formal, "أهلاً" for warmer
-- Write in Arabic script only. No transliteration.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 FORMAT GUIDANCE
 
 Social caption, Instagram static post:
-2 to 4 short sentences. One idea. Strong opening line.
-End with a soft CTA or a question.
+2 to 4 short sentences. One idea. Strong opening line. End with a soft CTA or a question.
 
 Social caption, Instagram carousel:
-Slide 1: one line hook.
-Slides 2 to 4: one idea per slide, 1 to 2 sentences.
-Final slide: CTA or closing statement.
-Label each slide: Slide 1, Slide 2 etc.
+Slide 1: one line hook. Slides 2 to 4: one idea per slide, 1 to 2 sentences. Final slide: CTA or closing statement. Label each slide: Slide 1, Slide 2 etc.
 
 Social caption, Instagram Reel:
-1 to 2 lines max. Energy led. Present tense.
-Optional hashtags at the end.
+1 to 2 lines max. Energy led. Present tense. Optional hashtags at the end.
 
 Social caption, Instagram Story text:
-1 line. Max 8 words. Works over an image or video.
-Optional CTA sticker text.
+1 line. Max 8 words. Works over an image or video. Optional CTA sticker text.
 
 Social caption, Facebook post:
-3 to 5 sentences. Slightly more context than Instagram.
-One CTA at the end.
+3 to 5 sentences. Slightly more context than Instagram. One CTA at the end.
 
 LinkedIn post:
-Opening line hooks without clickbait.
-3 to 5 short paragraphs. One idea each.
-Thought leadership tone. Confident, not salesy.
-Attributed to school leadership or Britus group.
-End with a question or forward-looking statement.
+Opening line hooks without clickbait. 3 to 5 short paragraphs. One idea each. Thought leadership tone. Confident, not salesy. Attributed to school leadership or Britus group. End with a question or forward-looking statement.
 
 Meta ad, primary text:
-1 to 3 sentences. Lead with the parent's concern, not the school's offer.
-No jargon. No superlatives without proof.
-Soft CTA at the end.
+1 to 3 sentences. Lead with the parent's concern, not the school's offer. No jargon. No superlatives without proof. Soft CTA at the end.
 
 Meta ad, headline:
 Max 27 characters. One clear promise.
@@ -242,41 +302,21 @@ Meta ad, description:
 1 sentence. Supports the headline. Adds one specific detail.
 
 Meta ad, image text:
-Text that sits directly on the ad creative itself.
-Meta's algorithm penalises heavy text on images. Keep it minimal.
-Under 15 percent of the image area. Two elements only:
-
-Main image text:
-- Max 5 to 6 words. Works instantly at a glance.
-- No context needed. It stands alone.
-- Emotional or benefit led. Not a tagline. Not a caption.
-- Large, readable font assumed. Every word must earn its space.
-- No punctuation unless it changes meaning.
-- Awareness stage: lead with belonging or curiosity
-- Conversion stage: lead with urgency or a direct benefit
-
-Sub-line (optional, sits below the main text):
-- Max 8 to 10 words. Adds one specific detail or CTA.
-- Smaller font than the main text.
-- Not a repeat of the main line. It should add something.
-- Can include the CTA if there is no separate button: "Book a tour today"
-- Can include a proof point: "Admissions open for 2026-27"
-- Can include the school name if not in the visual.
-
-Write 3 options. Each option = main text + sub-line.
-Label them: Option 1, Option 2, Option 3.
+Write 3 options. Each option = main text + sub-line. Label them: Option 1, Option 2, Option 3.
+Main image text: max 5 to 6 words. Works instantly at a glance. Emotional or benefit led.
+Sub-line (optional): max 8 to 10 words. Adds one specific detail or CTA.
 
 Google display ad:
 Headline: max 30 characters. Direct. Benefit led.
 Description: max 90 characters. One proof point or reassurance.
 
 Google search ad:
-Headline 1 (30 chars): keyword + school name or location
-Headline 2 (30 chars): key benefit or differentiator
-Headline 3 (30 chars): CTA
+Headline 1 (30 chars): keyword + school name or location.
+Headline 2 (30 chars): key benefit or differentiator.
+Headline 3 (30 chars): CTA.
 Description 1 (90 chars): expand on the benefit. Specific.
 Description 2 (90 chars): social proof or urgency. Honest.
-Label each line.
+Label each line clearly.
 
 Website hero:
 Headline: 6 to 10 words. Names the audience or the promise.
@@ -302,20 +342,14 @@ Label each.
 Email, admissions:
 Subject line: max 50 characters. Curiosity or benefit led.
 Preview text: 1 sentence, max 90 characters.
-Body:
-Paragraph 1: acknowledge where the parent is in the decision
-Paragraph 2: what the school offers, specific and relevant
-Paragraph 3: what happens next, simple, no pressure
-Sign off: warm, named if possible.
-CTA: one clear action.
+Body: Para 1: acknowledge where the parent is in the decision. Para 2: what the school offers, specific and relevant. Para 3: what happens next, simple, no pressure.
+Sign off: warm, named if possible. CTA: one clear action.
 
 Email subject line only:
-3 to 6 words. Benefit or curiosity led. No clickbait.
-Write 3 options.
+3 to 6 words. Benefit or curiosity led. No clickbait. Write 3 options.
 
 WhatsApp message:
-Max 3 sentences. Direct. Warm. Conversational.
-No formal language. No jargon.
+Max 3 sentences. Direct. Warm. Conversational. No formal language. No jargon.
 
 SMS:
 Max 160 characters including spaces. One message + one link.
@@ -325,213 +359,372 @@ Heading: 4 to 8 words. Bold, specific, human.
 Body: 2 to 3 sentences max. One named proof point.
 
 Pull quote or OOH tagline:
-5 to 10 words. Works with no context. Standalone impact.
-Write 3 options.
+5 to 10 words. Works with no context. Standalone impact. Write 3 options.
 
 Event banner headline:
-3 to 6 words. Warm, not corporate.
-Write 2 options: one awareness, one conversion.
+3 to 6 words. Warm, not corporate. Write 2 options: one awareness, one conversion.
 
 Video script:
-Opening (0 to 3s): hook. Works with visuals.
-Body (3 to 25s): 3 to 4 short statements. Spoken, not written.
-Closing (25 to 30s): CTA or emotional close.
+Opening (0–3s): hook. Works with visuals.
+Body (3–25s): 3 to 4 short statements. Spoken, not written.
+Closing (25–30s): CTA or emotional close.
 Label timecodes. Write for the ear.
 
 Video caption:
-1 line. Describes or teases the video.
-Present tense. Warm.
+1 line. Describes or teases the video. Present tense. Warm.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ARABIC WRITING RULES
+
+When the output language is Arabic, apply all the above AND:
+
+Language and register:
+- Write in Modern Standard Arabic (MSA), formal but warm
+- For KSA and Bahrain schools: formal MSA, not Gulf dialect
+- For BIST Tunisia: clean MSA unless specified otherwise
+- Never translate English copy word for word. Write as a native Arabic speaker would say it to a parent.
+
+Tone in Arabic:
+- Directness is warmth in Arabic. Avoid flowery language.
+- Use "طفلك" and "أنت" throughout
+- Short sentences. Do not write long nested sentences.
+- Sounds like a trusted school talking to a parent. Not a government office.
+
+Arabic hard rules:
+- No "أفضل مدرسة" without specific proof
+- No "متميز" as a standalone claim
+- No "نخبة"
+- No statistics as openers
+- No corporate Arabic that reads like a press release
+- CTAs should be direct: "احجز زيارتك" not a long polite construction
+
+Arabic format notes:
+- Social captions: emojis are fine and widely used
+- WhatsApp: very conversational. Short.
+- Ad headlines: aim for 5 to 7 words max. Arabic script takes more space.
+- Email: "عزيزي ولي الأمر" for formal, "أهلاً" for warmer open
+- Write in Arabic script only. No transliteration.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 OUTPUT FORMAT
-Structure your response in two parts, in this order:
+
+Structure your response in exactly two parts, in this order:
 
 PART 1: COPY
 Write the final copy first. Nothing else in this section.
-No commentary. No labels other than what the format requires.
+No commentary. No meta-labels other than what the format itself requires (e.g. "Slide 1:", "Headline:", "CTA:").
 If Arabic output: write in Arabic script only.
+If English and Arabic: write English first, then a blank line, then Arabic.
 
 PART 2: THINKING
-Show your process after the copy. Format exactly like this:
+Show your craft notes after the copy. Format exactly like this (one line each):
 
-School read: [this school's voice and character]
-Audience: [who you wrote for and what they care about]
-Pillar: [which pillar and why]
-Funnel stage: [how the stage shaped the copy, or not specified]
-Format: [what the format demanded]
-Language approach: [English or Arabic and the register decisions made]
-Angle: [what the user wanted to say, in your own words]
-TOV choices: [which voice rules guided the copy]
+School read: [this school's voice and character in one sentence]
+Audience: [who you wrote for and what they care about most]
+Pillar: [which pillar you led with and why]
+Funnel stage: [how the stage shaped the copy, or "not specified"]
+Format: [what the format demanded structurally]
+Language approach: [register and tone decisions made]
+Angle: [what the user wanted to say, distilled to one sentence]
+TOV choices: [specific voice rules that guided the copy]
 What was avoided: [what you ruled out and why]
 """
 
-# ── MAIN UI ──
-st.title("Britus Education Copywriter")
-st.caption("Tell the tool what you need. Get copy written in the Britus voice.")
+# ── SIDEBAR ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    try:
+        logo_path = Path("ubrik_logo.png")
+        if logo_path.exists():
+            logo_data = base64.b64encode(logo_path.read_bytes()).decode()
+            st.markdown(
+                f'<img src="data:image/png;base64,{logo_data}" width="110" style="margin-bottom:16px">',
+                unsafe_allow_html=True,
+            )
+    except Exception:
+        pass
 
+    st.markdown('<div class="sidebar-wordmark">Britus Education</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-meta">Copy Studio</div>', unsafe_allow_html=True)
+    st.markdown('<hr class="sidebar-rule">', unsafe_allow_html=True)
+
+    st.markdown('<div class="sidebar-label">Voice</div>', unsafe_allow_html=True)
+    for word in ["Warm", "Approachable", "Personal"]:
+        st.markdown(f'<span class="sidebar-pill">{word}</span>', unsafe_allow_html=True)
+
+    st.markdown('<hr class="sidebar-rule">', unsafe_allow_html=True)
+
+    st.markdown('<div class="sidebar-label">Messaging Pillars</div>', unsafe_allow_html=True)
+    for p in ["Every Child Is Known", "Skills for the World Ahead", "Roots That Last a Lifetime"]:
+        st.markdown(f'<span class="sidebar-pill">{p}</span>', unsafe_allow_html=True)
+
+    st.markdown('<hr class="sidebar-rule">', unsafe_allow_html=True)
+
+    st.markdown('<div class="sidebar-label">Positioning</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-size:12px;color:#98B0C4;font-style:italic;line-height:1.6">'
+        '"To know a child is to change everything possible for them."'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<hr class="sidebar-rule">', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-size:11px;color:#5C7A96">Britus × Ubrik · 2026</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ── MAIN ─────────────────────────────────────────────────────────────────────
+st.markdown('<div class="page-title">Britus Copywriter</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="page-sub">Fill in the brief. Get copy in the Britus voice, ready to use.</div>',
+    unsafe_allow_html=True,
+)
 st.divider()
 
+# Row 1
 col1, col2 = st.columns(2)
 with col1:
     school = st.selectbox(
         "School",
-        ["Group / Britus Education",
-         "Education Castle International School",
-         "Leadership International School",
-         "Britus Al Olaya (BISO)",
-         "Education Gate International School",
-         "Belvedere British School",
-         "BISB Bahrain",
-         "BISSE Bahrain",
-         "BIST Tunisia",
-         "Sheffield Private School",
-         "Rowad Al Farabi"]
+        [
+            "Group / Britus Education",
+            "Education Castle International School (ECIS)",
+            "Leadership International School (LIS)",
+            "Britus Al Olaya (BISO)",
+            "Education Gate International School (EGIS)",
+            "Belvedere British School",
+            "BISB Bahrain",
+            "BISSE Bahrain",
+            "BIST Tunisia",
+            "Sheffield Private School",
+            "Rowad Al Farabi",
+        ],
     )
-
 with col2:
     pillar = st.selectbox(
-        "Pillar",
-        ["Not sure, decide based on the angle",
-         "Pillar 1: Every Child Is Known",
-         "Pillar 2: Skills for the World Ahead",
-         "Pillar 3: Roots That Last a Lifetime"]
+        "Messaging pillar",
+        [
+            "Decide based on the angle",
+            "Pillar 1: Every Child Is Known",
+            "Pillar 2: Skills for the World Ahead",
+            "Pillar 3: Roots That Last a Lifetime",
+        ],
     )
 
+# Row 2
 col3, col4 = st.columns(2)
 with col3:
     content_format = st.selectbox(
-        "Content format",
-        ["Social caption, Instagram static post",
-         "Social caption, Instagram carousel",
-         "Social caption, Instagram Reel",
-         "Social caption, Instagram Story text",
-         "Social caption, Facebook post",
-         "LinkedIn post",
-         "Meta ad, primary text",
-         "Meta ad, headline",
-         "Meta ad, description",
-         "Meta ad, image text",
-         "Google display ad",
-         "Google search ad",
-         "Website hero",
-         "Landing page hero",
-         "Website section copy",
-         "Meta title and description (SEO)",
-         "Email, admissions",
-         "Email subject line only",
-         "WhatsApp message",
-         "SMS",
-         "Brochure panel",
-         "Pull quote or OOH tagline",
-         "Event banner headline",
-         "Video script",
-         "Video caption"]
+        "Format",
+        [
+            "── Social ──",
+            "Social caption — Instagram static post",
+            "Social caption — Instagram carousel",
+            "Social caption — Instagram Reel",
+            "Social caption — Instagram Story text",
+            "Social caption — Facebook post",
+            "LinkedIn post",
+            "── Paid Media ──",
+            "Meta ad — primary text",
+            "Meta ad — headline",
+            "Meta ad — description",
+            "Meta ad — image text (3 options)",
+            "Google Display ad",
+            "Google Search ad",
+            "── Website ──",
+            "Website hero",
+            "Landing page hero",
+            "Website section copy",
+            "Meta title + description (SEO)",
+            "── Email ──",
+            "Email — admissions (full)",
+            "Email — subject line (3 options)",
+            "Newsletter intro paragraph",
+            "── Messaging ──",
+            "WhatsApp message",
+            "SMS",
+            "── Print / Collateral ──",
+            "Brochure panel",
+            "Pull quote / OOH tagline (3 options)",
+            "Event banner headline (2 options)",
+            "── Video ──",
+            "Video script (30 sec)",
+            "Video caption",
+        ],
     )
-
 with col4:
     platform = st.selectbox(
         "Platform",
-        ["Instagram",
-         "Facebook",
-         "Instagram and Facebook",
-         "LinkedIn",
-         "Google",
-         "WhatsApp",
-         "SMS",
-         "Email",
-         "Website",
-         "Landing page",
-         "Print / Brochure",
-         "Outdoor / OOH",
-         "Video"]
+        [
+            "Instagram",
+            "Facebook",
+            "Instagram and Facebook",
+            "LinkedIn",
+            "Google",
+            "WhatsApp",
+            "SMS",
+            "Email",
+            "Website",
+            "Landing page",
+            "Print / Brochure",
+            "Outdoor / OOH",
+            "Video / YouTube",
+            "TikTok",
+        ],
     )
 
+# Row 3
 col5, col6 = st.columns(2)
 with col5:
     language = st.selectbox(
-        "Output language",
-        ["English",
-         "Arabic",
-         "English and Arabic"]
+        "Language",
+        ["English", "Arabic", "English and Arabic"],
     )
-
 with col6:
     funnel_stage = st.selectbox(
-        "Funnel stage (optional)",
-        ["Not specified",
-         "Awareness (TOFU)",
-         "Consideration (MOFU)",
-         "Decision / Conversion (BOFU)",
-         "Retargeting"]
+        "Funnel stage",
+        [
+            "Not specified",
+            "Awareness (TOFU)",
+            "Consideration (MOFU)",
+            "Decision / Conversion (BOFU)",
+            "Retargeting",
+        ],
     )
 
+# Row 4 — audience + angle
 audience = st.text_input(
     "Audience (optional)",
-    placeholder="e.g. Saudi national families, South Asian expat parents..."
+    placeholder="e.g. Saudi national families, South Asian expat parents in Riyadh, Arabic-speaking parents...",
 )
 
 angle = st.text_area(
     "What do you want to say?",
-    height=120,
-    placeholder="e.g. Highlight the open-door policy. Warm and reassuring. No hard sell."
+    height=110,
+    placeholder=(
+        "Describe the angle, the key message, or the feeling you want to leave the reader with.\n"
+        "e.g. Highlight the open-door teacher policy. Warm tone. No hard sell. "
+        "Mention that admissions are open for 2026–27."
+    ),
 )
 
-if st.button("Write copy", type="primary"):
+generate = st.button("Write copy", type="primary", use_container_width=False)
+
+# ── GENERATION ───────────────────────────────────────────────────────────────
+if generate:
     if not angle.strip():
         st.warning("Tell the tool what you want to say first.")
-    else:
-        user_message = f"""Write copy for the following:
+        st.stop()
+
+    # Guard against section dividers selected as format
+    if content_format.startswith("──"):
+        st.warning("Please select a specific format, not a section header.")
+        st.stop()
+
+    user_message = f"""Write copy for the following brief:
 
 School: {school}
-Pillar: {pillar}
+Messaging pillar: {pillar}
 Content format: {content_format}
 Platform: {platform}
 Output language: {language}
 Funnel stage: {funnel_stage}
-Audience: {audience if audience.strip() else "Not specified. Use your judgement based on the school and angle."}
-What to say: {angle}"""
+Audience: {audience.strip() if audience.strip() else "Not specified — use your judgement based on the school, format, and angle."}
+What to say / angle: {angle.strip()}"""
 
-        with st.spinner("Writing..."):
-            client = anthropic.Anthropic()
-            message = client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=1500,
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {"role": "user", "content": user_message}
-                ]
+    st.divider()
+
+    # Output containers
+    output_header = st.markdown(
+        '<div class="output-wrap"><div class="output-header">Generated copy</div></div>',
+        unsafe_allow_html=True,
+    )
+    copy_placeholder = st.empty()
+    thinking_placeholder = st.empty()
+
+    # Streaming call
+    client = anthropic.Anthropic()
+    full_text = ""
+
+    is_arabic = language == "Arabic"
+    dir_attr = 'dir="rtl"' if is_arabic else ""
+
+    with client.messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=2000,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_message}],
+    ) as stream:
+        for delta in stream.text_stream:
+            full_text += delta
+
+            # Split live as text arrives
+            if "PART 2: THINKING" in full_text:
+                copy_part = full_text.split("PART 2: THINKING")[0]
+                copy_clean = copy_part.replace("PART 1: COPY", "").strip()
+            else:
+                copy_clean = full_text.replace("PART 1: COPY", "").strip()
+
+            copy_placeholder.markdown(
+                f'<div class="output-wrap">'
+                f'<div class="output-header">Generated copy</div>'
+                f'<div class="output-copy" {dir_attr}>{copy_clean}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-            output = message.content[0].text
 
-        # Split copy from thinking
-        if "PART 2: THINKING" in output:
-            parts = output.split("PART 2: THINKING")
-            copy = parts[0].replace("PART 1: COPY", "").strip()
-            thinking = parts[1].strip()
-        else:
-            copy = output.strip()
-            thinking = ""
+    # Final split
+    if "PART 2: THINKING" in full_text:
+        parts = full_text.split("PART 2: THINKING")
+        copy_final = parts[0].replace("PART 1: COPY", "").strip()
+        thinking_raw = parts[1].strip()
+    else:
+        copy_final = full_text.replace("PART 1: COPY", "").strip()
+        thinking_raw = ""
 
-        st.divider()
+    # Render final copy cleanly
+    copy_placeholder.markdown(
+        f'<div class="output-wrap">'
+        f'<div class="output-header">Generated copy</div>'
+        f'<div class="output-copy" {dir_attr}>{copy_final}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-        st.subheader("Copy")
-        st.write(copy)
-        st.code(copy, language=None)
-        st.caption("Use the copy icon above to copy the text.")
+    # Copy-to-clipboard via code block
+    st.code(copy_final, language=None)
+    st.caption("Use the copy icon above to copy the text.")
 
-        if thinking:
-            with st.expander("How the copy was built", expanded=False):
-                st.markdown(thinking)
+    # Thinking expander
+    if thinking_raw:
+        with st.expander("How the copy was built", expanded=False):
+            lines = [ln.strip() for ln in thinking_raw.splitlines() if ln.strip()]
+            for line in lines:
+                if ":" in line:
+                    label, _, rest = line.partition(":")
+                    st.markdown(
+                        f'<div class="thinking-row">'
+                        f'<span class="thinking-label">{label.strip()}:</span> {rest.strip()}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(f'<div class="thinking-row">{line}</div>', unsafe_allow_html=True)
 
-        st.divider()
-        st.caption("Was this right?")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Yes, use this"):
-                st.success("Glad it worked.")
-        with col2:
-            if st.button("Not quite"):
-                st.text_area(
-                    "What was off?",
-                    placeholder="Tell us what could be better...",
-                    key="feedback"
-                )
+    st.divider()
+
+    # Feedback row
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("✓  This works", key="fb_good"):
+            st.success("Good to hear.")
+    with c2:
+        if st.button("✗  Not quite", key="fb_bad"):
+            st.text_area(
+                "What was off?",
+                placeholder="Tell us what to adjust — tone, angle, length, specifics...",
+                key="feedback_text",
+            )
